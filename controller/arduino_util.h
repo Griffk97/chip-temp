@@ -28,9 +28,18 @@ public:
 };
 
 // Commands to control relay bank
-#define RELAY_ADDR 0x6d
+#define RELAY_ADDR 0x08
 
 bool writeRelay(uint8_t cmd) {
+    static bool initialized = false;
+    if (!initialized) {
+        PRINTLN("Init start");
+        Wire.begin();
+        Wire.beginTransmission(RELAY_ADDR); 
+        Wire.endTransmission(RELAY_ADDR); 
+        PRINTLN("Init finished");
+        initialized = true;
+    }
     Wire.beginTransmission(RELAY_ADDR); 
     Wire.write(cmd);
     return(Wire.endTransmission());
@@ -46,6 +55,8 @@ uint8_t readRelay(uint8_t cmd) {
 bool setRelayState(uint8_t zone_idx, bool tgt) {
     if (zone_idx > 3)
         return false;
+    PRINT("reading relay: ");
+    PRINTLN(zone_idx);
     bool state = readRelay(zone_idx + 5);  // get state cmd
     if (state == tgt)
         return true;

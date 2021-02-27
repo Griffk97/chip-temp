@@ -1,15 +1,16 @@
 #include <string.h> 
 
-#define MINUTESECS 10
-#define N_SLOTS 4
-#define N_ZONES 4
-#define N_TSTATS 10
-
 #if defined(__arm__)
 #include "arduino_util.h"
 #else
 #include "util.h"
 #endif
+
+#define MINUTESECS 10
+#define SAMPLE_INTERVAL 250   // 1/4 second = 250 milliseconds
+#define N_SLOTS 4
+#define N_ZONES 4
+#define N_TSTATS 10
 
 void run_tests();
 void log_data(unsigned short hr_min, int i, float deg, float tgt, bool is_on, bool call);
@@ -211,15 +212,18 @@ void checkTempsAgainstSchedule() {
         Tstat_t &tstat = cfg.tstats[i];
         if (tstat.active) {
             //printf("hr=%d, min=%d, samples=%ld ", hr_min/60, hr_min%60, data.tstats[i].stat_1min.count);
-            Tdata_t tdata= data.tstats[i];
+            Tdata_t &tdata = data.tstats[i];
             float deg = tdata.stat_1min.getTemp();
-            PRINTLN(deg);
             tdata.tgt = cfg.zones[tstat.zone].getTgtTemp(hr_min);
             float tgt = (float) tdata.tgt;
             Zdata_t &zone = data.zones[tstat.zone];
             float pad = 0.3;
             bool call = false;
             tgt = zone.is_on ? tgt + pad : tgt - pad;
+            PRINT(tgt);
+            PRINT(",");
+            PRINTLN(deg);
+            //return;
             if (deg < tgt) {
                 call = true;
                 data.zones[tstat.zone].call_for_heat = true;
@@ -231,29 +235,27 @@ void checkTempsAgainstSchedule() {
     // process each zone, turning heat on or off as needed
     for (i = 0; i < cfg.n_zones; i++) {
         Zdata_t &zone = data.zones[i];
-        if (zone.call_for_heat != zone.is_on)
+        //if (zone.call_for_heat != zone.is_on)
             toggleHeat(i);
     }
 }
 
 void toggleHeat(int zone_idx) {
     Zdata_t &zone = data.zones[zone_idx];
+    PRINT(zone_idx);
+    PRINT(" zone is toggling heat: ");
+    PRINTLN(zone.is_on);
     zone.on_off_time = timer.time();
     zone.is_on = !zone.is_on;              // toggle state
     setRelayState(zone_idx, zone.is_on);    // send command to relay control
 }
 
 
-#define SAMPLE_INTERVAL 250   // 1/4 second = 250 milliseconds
 
 void processTemps(unsigned long ms) {
     static unsigned long next_sample_time = 0;
     static unsigned long next_1_min = 0;
     static unsigned long next_5_min = 0;
-
-    struct TempStat_t stat_1min;
-    struct TempStat_t stat_5min;
-    float prev_5min;
 
     if (ms >= next_sample_time) {
         for (int i=0; i < cfg.n_tstats; i++) {
