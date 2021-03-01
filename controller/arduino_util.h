@@ -24,6 +24,7 @@ public:
     unsigned long time() { return _client.getEpochTime(); }
     int getHours() { return _client.getHours(); }
     int getMinutes() { return _client.getMinutes(); }
+    String getFormattedTime() { return _client.getFormattedTime(); }
 
 };
 
@@ -55,11 +56,8 @@ uint8_t readRelay(uint8_t cmd) {
 bool setRelayState(uint8_t zone_idx, bool tgt) {
     if (zone_idx > 3)
         return false;
-    PRINT("reading relay: ");
-    PRINTLN(zone_idx);
     bool state = readRelay(zone_idx + 5);  // get state cmd
     if (state == tgt)
         return true;
-    PRINT("toggle relay\n");
     return(writeRelay(zone_idx + 1));     // toggle cmd
 }

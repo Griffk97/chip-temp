@@ -1,4 +1,5 @@
 #include <string.h> 
+#include <time.h> 
 
 #if defined(__arm__)
 #include "arduino_util.h"
@@ -6,7 +7,7 @@
 #include "util.h"
 #endif
 
-#define MINUTESECS 10
+#define MINUTESECS 60
 #define SAMPLE_INTERVAL 250   // 1/4 second = 250 milliseconds
 #define N_SLOTS 4
 #define N_ZONES 4
@@ -16,7 +17,7 @@ void run_tests();
 void log_data(unsigned short hr_min, int i, float deg, float tgt, bool is_on, bool call);
 void checkTempsAgainstSchedule();
 void toggleHeat(int zone_idx);
-void processTemps(unsigned long ms);
+void periodicFuncs(unsigned long ms);
 bool isWorkDay();
 
 Timer_t timer;
@@ -164,18 +165,18 @@ void initData() {
 }
 
 void setup() {
-    initData();
     //run_tests();
 
     Serial.begin(115200);
     
     // Figure out time zone
+    initData();
 
-    // Find out what time it is
-    timer.begin(cfg.time_zone_offset);
-    PRINT(" Secs since 1970: ");
-    PRINTLN(timer.time());
-    
+    processWiFi(1);   // first time through initializes stuff that requires a connection
+    // Set on/off times after timer initialized.
+    unsigned long tm = timer.time();
+    data.zones[0].on_off_time = tm;
+
     // get weather prediction
 
 }
@@ -235,24 +236,32 @@ void checkTempsAgainstSchedule() {
     // process each zone, turning heat on or off as needed
     for (i = 0; i < cfg.n_zones; i++) {
         Zdata_t &zone = data.zones[i];
-        //if (zone.call_for_heat != zone.is_on)
+        if (zone.call_for_heat != zone.is_on)
             toggleHeat(i);
     }
 }
 
 void toggleHeat(int zone_idx) {
     Zdata_t &zone = data.zones[zone_idx];
-    PRINT(zone_idx);
-    PRINT(" zone is toggling heat: ");
-    PRINTLN(zone.is_on);
     zone.on_off_time = timer.time();
     zone.is_on = !zone.is_on;              // toggle state
     setRelayState(zone_idx, zone.is_on);    // send command to relay control
 }
 
 
+void fiveMinuteUpdate() {
+    int i;
 
-void processTemps(unsigned long ms) {
+    for (i=0; i < cfg.n_tstats; i++) {
+        Tstat_t &tstat = cfg.tstats[i];
+        if (tstat.active) {
+            Tdata_t &tdata = data.tstats[i];
+            tdata.stat_5min.getTemp();
+        }
+    }
+}
+
+void periodicFuncs(unsigned long ms) {
     static unsigned long next_sample_time = 0;
     static unsigned long next_1_min = 0;
     static unsigned long next_5_min = 0;
@@ -279,6 +288,7 @@ void processTemps(unsigned long ms) {
 
     if (ms >= next_5_min) {
         if (next_5_min) {
+            fiveMinuteUpdate();
         }
         next_5_min = ms + (5 * MINUTESECS * 1000);
     }
@@ -297,7 +307,7 @@ void test_sched() {
 
 void test_process_temp() {
     for (long ms=1000; ms < 70000; ms++) {
-        processTemps(ms);
+        periodicFuncs(ms);
     }
 }
 void run_tests() {
@@ -309,15 +319,21 @@ void run_tests() {
 
 void sendZoneStatus(WiFiClient &client, int zone_idx) {
     Zdata_t &zone = data.zones[zone_idx];
-    client.print("Zone: ");
+    client.print("<title>THERMOSTATUS</title>");
+    client.print("<h1>");
+    client.print("Thermostat as of ");
+    client.print(timer.getFormattedTime());
+    client.print("<br>Zone: ");
     client.print(zone_idx);
     if (zone.is_on)
         client.print(" ON ");
     else
         client.print(" OFF ");
     client.print(" for ");
-    client.print(zone.on_off_time);
-    client.print(" minutes<br />\n");
+
+    unsigned long minutes = (timer.time() - zone.on_off_time) / 60;
+    client.print(minutes);
+    client.print(" minutes<br>\n");
 
     int i;
     for (i=0; i < cfg.n_tstats; i++) {
@@ -329,13 +345,14 @@ void sendZoneStatus(WiFiClient &client, int zone_idx) {
             client.print(" Tgt: ");
             client.print(tdata.tgt);
 
-            client.print(" Temp1: ");
+            client.print(" Temp: ");
             client.print(tdata.stat_1min.last_temp);
-            client.print(" Temp5: ");
+            client.print("  5min: ");
             client.print(tdata.stat_5min.last_temp);
             client.print("<br />\n");
         }
     }  
+    client.print("</h1>");
 }
 
 void sendFrontPage(WiFiClient &client) {
@@ -343,13 +360,15 @@ void sendFrontPage(WiFiClient &client) {
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html");
     client.println("Connection: close");  // the connection will be closed after completion of the response
-    client.println("Refresh: 5");  // refresh the page automatically every 5 sec
+    client.println("Refresh: 5");         // refresh the page automatically every 5 sec
     client.println();
     client.println("<!DOCTYPE HTML>");
     client.println("<html>");
+    client.println("<body>");
 
     sendZoneStatus(client, 0);
     
+    client.println("</body>");
     client.println("</html>");
   
 }
@@ -394,12 +413,16 @@ void processWiFi(unsigned long ms) {
         if ( WiFi.status() != WL_CONNECTED) {
             PRINT("Attempting to connect to WPA network...\n");
             if (WiFi.begin(cfg.ssid, cfg.pass) != WL_CONNECTED) {
-                PRINT("Couldn't get a wifi connection\n");
                 return;
             }
             IPAddress ip = WiFi.localIP();
             PRINT("IP Address: ");
             PRINTLN(ip);
+
+            // Find out what time it is
+            timer.begin(-5);
+            //PRINT(" Secs since 1970: ");
+            //PRINTLN(timer.time());
 
             server.begin();
         }
@@ -428,7 +451,7 @@ void send_server() {
 
 void loop() {
     unsigned long ms = millis();
-    processTemps(ms);
+    periodicFuncs(ms);
     processWiFi(ms);
     
     // Must call to periodically update time server
