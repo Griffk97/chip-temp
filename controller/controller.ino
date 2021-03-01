@@ -18,9 +18,8 @@ void log_data(unsigned short hr_min, int i, float deg, float tgt, bool is_on, bo
 void checkTempsAgainstSchedule();
 void toggleHeat(int zone_idx);
 void periodicFuncs(unsigned long ms);
+void processWiFi();
 bool isWorkDay();
-
-Timer_t timer;
 
 struct Tstat_t {
     bool active;
@@ -172,7 +171,7 @@ void setup() {
     // Figure out time zone
     initData();
 
-    processWiFi(1);   // first time through initializes stuff that requires a connection
+    processWiFi();   // first time through initializes stuff that requires a connection
     // Set on/off times after timer initialized.
     unsigned long tm = timer.time();
     data.zones[0].on_off_time = tm;
@@ -265,7 +264,8 @@ void periodicFuncs(unsigned long ms) {
     static unsigned long next_sample_time = 0;
     static unsigned long next_1_min = 0;
     static unsigned long next_5_min = 0;
-
+    static unsigned long next_wifi_time = 0;
+    
     if (ms >= next_sample_time) {
         for (int i=0; i < cfg.n_tstats; i++) {
             Tstat_t &tstat = cfg.tstats[i];
@@ -277,6 +277,11 @@ void periodicFuncs(unsigned long ms) {
             }
         }
         next_sample_time = ms + SAMPLE_INTERVAL;
+    }
+
+    if (ms >= next_wifi_time) {
+        processWiFi();
+        next_wifi_time = ms + 1000;
     }
 
     if (ms >= next_1_min) {
@@ -322,16 +327,21 @@ void sendZoneStatus(WiFiClient &client, int zone_idx) {
     client.print("<title>THERMOSTATUS</title>");
     client.print("<h1>");
     client.print("Thermostat as of ");
-    client.print(timer.getFormattedTime());
+    client.print(timer.getHours());
+    client.print(":");
+    int m = timer.getMinutes();
+    if (m <= 9)
+        client.print("0");
+    client.print(m);
     client.print("<br>Zone: ");
-    client.print(zone_idx);
+    client.print(cfg.zones[zone_idx].name);
     if (zone.is_on)
         client.print(" ON ");
     else
         client.print(" OFF ");
     client.print(" for ");
 
-    unsigned long minutes = (timer.time() - zone.on_off_time) / 60;
+    int minutes = (timer.time() - zone.on_off_time) / 60;
     client.print(minutes);
     client.print(" minutes<br>\n");
 
@@ -357,19 +367,19 @@ void sendZoneStatus(WiFiClient &client, int zone_idx) {
 
 void sendFrontPage(WiFiClient &client) {
     // send a standard http response header
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/html");
-    client.println("Connection: close");  // the connection will be closed after completion of the response
-    client.println("Refresh: 5");         // refresh the page automatically every 5 sec
-    client.println();
-    client.println("<!DOCTYPE HTML>");
-    client.println("<html>");
-    client.println("<body>");
+    client.print("HTTP/1.1 200 OK\n");
+    client.print("Content-Type: text/html\n");
+    client.print("Connection: close\n");  // the connection will be closed after completion of the response
+    client.print("Refresh: 5\n");         // refresh the page automatically every 5 sec
+    client.print("\n");
+    client.print("<!DOCTYPE HTML>");
+    client.print("<html>");
+    client.print("<body>");
 
     sendZoneStatus(client, 0);
     
-    client.println("</body>");
-    client.println("</html>");
+    client.print("</body>");
+    client.print("</html>");
   
 }
 
@@ -404,37 +414,6 @@ void processClient(WiFiClient &client) {
     }
 }
     
-void processWiFi(unsigned long ms) {
-    static unsigned long next_check_time = 0;
-    static WiFiServer server(80);
-    
-    if (ms >= next_check_time) {
-        
-        if ( WiFi.status() != WL_CONNECTED) {
-            PRINT("Attempting to connect to WPA network...\n");
-            if (WiFi.begin(cfg.ssid, cfg.pass) != WL_CONNECTED) {
-                return;
-            }
-            IPAddress ip = WiFi.localIP();
-            PRINT("IP Address: ");
-            PRINTLN(ip);
-
-            // Find out what time it is
-            timer.begin(-5);
-            //PRINT(" Secs since 1970: ");
-            //PRINTLN(timer.time());
-
-            server.begin();
-        }
-          
-        WiFiClient client = server.available();        
-        if (client)
-          processClient(client);
-        
-        next_check_time = ms + 1000;
-    }
-}
-
 void send_server() {
     int data = 0;
     WiFiClient client;
@@ -452,7 +431,6 @@ void send_server() {
 void loop() {
     unsigned long ms = millis();
     periodicFuncs(ms);
-    processWiFi(ms);
     
     // Must call to periodically update time server
     timer.update();
