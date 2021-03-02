@@ -1,5 +1,13 @@
+#define MINUTESECS 60
+#define SAMPLE_INTERVAL 250   // 1/4 second = 250 milliseconds
+#define TEMP_PAD 0.3          // pad = 0.3 degrees which creates a temperature target band.
+#define FLIP_FLOP_MINUTES 5   // minutes a zone must stay in a state to prevent rapid flipping on and off
+
 #include <string.h> 
 #include <time.h> 
+#include <stdint.h>
+
+#include "vars.h"
 
 #if defined(__arm__)
 #include "arduino_util.h"
@@ -7,121 +15,23 @@
 #include "util.h"
 #endif
 
-#define MINUTESECS 60
-#define SAMPLE_INTERVAL 250   // 1/4 second = 250 milliseconds
-#define N_SLOTS 4
-#define N_ZONES 4
-#define N_TSTATS 10
+// Declare main data sructures
+Cfg_t cfg;
+Data_t data;
+WiFiClient client;
+float aref_volts = 3.3;
 
 void run_tests();
 void log_data(unsigned short hr_min, int i, float deg, float tgt, bool is_on, bool call);
 void checkTempsAgainstSchedule();
 void toggleHeat(int zone_idx);
 void periodicFuncs(unsigned long ms);
-void processWiFi();
 bool isWorkDay();
 
-struct Tstat_t {
-    bool active;
-    short zone;
-    short input_port;  // Analog port on chip.  -1 for wifi
-    char ssid[12];     // wifi id
-};
-
-struct SchedEntry_t {
-    short n_slots;
-    unsigned short slot_time[N_SLOTS];
-};
-
-struct Sched_t {
-    struct SchedEntry_t work;
-    struct SchedEntry_t non_work;
-};
-
-struct Zone_t {
-    char name[12];
-    bool use_custom_schedule;
-    struct Sched_t custom_sched;
-    unsigned char tgt_temp[N_SLOTS];    
-    bool be_there[N_SLOTS];
-
-    unsigned char getTgtTemp(unsigned short hr_min);
-};
-
-struct Cfg_t {
-    char town[20];
-    char ssid[20];
-    char pass[20];
-    float lat;
-    float lon;
-    char time_zone_offset;
-    short n_tstats;
-    short n_zones;
-    struct Tstat_t tstats[N_TSTATS];
-    struct Zone_t zones[N_ZONES];
-    struct Sched_t default_sched;
-
-};
-
-struct TempStat_t {
-    unsigned long sensor_sum;
-    unsigned long count;
-    float last_temp;
-    
-    void addSample(int sample) {
-        sensor_sum += sample;
-        count++;
-    }
-
-    // TMP36 calibrated to 10mV / deg C and 750mV at 25C (= 77F)
-    // With 0 - 3.3V input voltage and 1024 (10 bit) digital units
-    // 1 unit = 0.0032226 V = 3.2226 mV = 0.32226 deg C = 0.58 deg F
-    // 1C = 3.1031 units
-    // 1F = 1.724 units
-    // 25C = 77F = 750mV ~= 232.73 units
-
-    float getTemp() {
-        if (count <= 0)
-            return (0.0);
-        float x = float(sensor_sum) / float(count); // average reading
-        x = 77.0 + (0.58 * (x - 232.73));           // temp in Faranheit
-        last_temp = x;                              // save most recent reading
-        sensor_sum = count = 0;
-        return x;
-    }
-};
-
-struct Cfg_t cfg;
-
-// dtemp = change in inside temp per hour
-// dtemp_off = dtemp with heat off.  Best samples when has been off a while
-// factor = dtemp_off / (inside temp - outside temp)
-// heat_on_dtemp = peak change in dtemp when heat is on
-struct Tdata_t {
-    struct TempStat_t stat_1min;
-    struct TempStat_t stat_5min;
-    float prev_5min;
-    float factor;
-    float heat_on_dtemp;  
-    uint8_t tgt;
-};
-
-struct Zdata_t {
-    bool call_for_heat;
-    bool is_on;
-    unsigned long on_off_time;
-};
-
-// Working data
-struct Data_t {
-    unsigned char my_ip[4];
-    struct Tdata_t tstats[N_TSTATS];
-    Zdata_t zones[N_ZONES];
-};
-
-Data_t data;
-WiFiClient client;
-
+void setArefVoltage() {
+    analogReference(AR_INTERNAL1V0);
+    aref_volts = 1.0;
+}
 unsigned short getHrMin() {
     int hr = timer.getHours();
     int min = timer.getMinutes();
@@ -157,7 +67,7 @@ void initData() {
 
     cfg.n_zones = 1;
     strcpy(cfg.zones[0].name, "FAMILY RM");
-    memset(cfg.zones[0].tgt_temp, 70, N_SLOTS);
+    memset(cfg.zones[0].tgt_temp, 72, N_SLOTS);
     cfg.zones[0].tgt_temp[N_SLOTS - 1] = 63;
 
     initSched(cfg.default_sched);
@@ -171,11 +81,14 @@ void setup() {
     // Figure out time zone
     initData();
 
-    processWiFi();   // first time through initializes stuff that requires a connection
+    setArefVoltage();
+    
+    processWiFi(cfg);   // first time through initializes stuff that requires a connection
+
     // Set on/off times after timer initialized.
     unsigned long tm = timer.time();
     data.zones[0].on_off_time = tm;
-
+    
     // get weather prediction
 
 }
@@ -184,6 +97,29 @@ void setup() {
 bool isWorkDay() {
     return true;
 }
+
+    // TMP36 calibrated to 10mV / deg C and 750mV at 25C (= 77F)
+    //
+    // If AREF = 3.3v, range is 0 - 3.3V divided by 1024 (10 bit) digital units
+    // 1 unit = 0.0032226 V = 3.2226 mV = 0.32226 deg C = 0.58 deg F
+    // 1C = 3.1031 units
+    // 1F = 1.724 units
+    // 25C = 77F = 750mV ~= 232.73 units
+    float TempStat_t::getTemp(float aref_volts) {
+        if (count <= 0)
+            return (0.0);
+        float x = float(sensor_sum) / float(count); // average reading
+        float units_per_volt = 1024.0 / aref_volts;
+        float degF_per_volt = 100.0 * 1.8;        
+        float degF_per_unit = degF_per_volt / units_per_volt;
+        float units_at_77F = 0.75 * units_per_volt; // 075 volts = 77 deg F
+        x -= units_at_77F;                          // just the difference
+        x = 77.0 + (x * degF_per_unit);;
+        last_temp = x;                              // save most recent reading
+        sensor_sum = count = 0;
+        return x;
+    }
+
 
 unsigned char Zone_t::getTgtTemp(unsigned short hr_min) {
     Sched_t &sched = use_custom_schedule ? custom_sched : cfg.default_sched;
@@ -204,7 +140,6 @@ void checkTempsAgainstSchedule() {
         data.zones[i].call_for_heat = false;
 
     // Test all thermostats against schedule.
-    // pad = 0.3 degrees which creates a temperature target band.
     //  If heat is off and temp < tgt - pad, set call_for_heat flag for the zone
     //  If heat is on and temp < tgt + pad, set call_for_heat flag for the zone
 
@@ -213,17 +148,16 @@ void checkTempsAgainstSchedule() {
         if (tstat.active) {
             //printf("hr=%d, min=%d, samples=%ld ", hr_min/60, hr_min%60, data.tstats[i].stat_1min.count);
             Tdata_t &tdata = data.tstats[i];
-            float deg = tdata.stat_1min.getTemp();
+            float deg = tdata.stat_1min.getTemp(aref_volts);
             tdata.tgt = cfg.zones[tstat.zone].getTgtTemp(hr_min);
             float tgt = (float) tdata.tgt;
             Zdata_t &zone = data.zones[tstat.zone];
-            float pad = 0.3;
             bool call = false;
-            tgt = zone.is_on ? tgt + pad : tgt - pad;
+            tgt = zone.is_on ? tgt + TEMP_PAD : tgt - TEMP_PAD;
             PRINT(tgt);
             PRINT(",");
             PRINTLN(deg);
-            //return;
+
             if (deg < tgt) {
                 call = true;
                 data.zones[tstat.zone].call_for_heat = true;
@@ -235,8 +169,16 @@ void checkTempsAgainstSchedule() {
     // process each zone, turning heat on or off as needed
     for (i = 0; i < cfg.n_zones; i++) {
         Zdata_t &zone = data.zones[i];
-        if (zone.call_for_heat != zone.is_on)
-            toggleHeat(i);
+        
+        unsigned long secs = timer.time();
+        if (zone.on_off_time == 0)
+          zone.on_off_time = secs;
+        else {
+            secs -= zone.on_off_time;  // seconds in current state
+            //PRINTLN(secs_in_state);
+            if ((zone.call_for_heat != zone.is_on) && (secs >= FLIP_FLOP_MINUTES * MINUTESECS))
+                toggleHeat(i);
+        }
     }
 }
 
@@ -247,92 +189,21 @@ void toggleHeat(int zone_idx) {
     setRelayState(zone_idx, zone.is_on);    // send command to relay control
 }
 
-
-void fiveMinuteUpdate() {
-    int i;
-
-    for (i=0; i < cfg.n_tstats; i++) {
-        Tstat_t &tstat = cfg.tstats[i];
-        if (tstat.active) {
-            Tdata_t &tdata = data.tstats[i];
-            tdata.stat_5min.getTemp();
-        }
-    }
-}
-
-void periodicFuncs(unsigned long ms) {
-    static unsigned long next_sample_time = 0;
-    static unsigned long next_1_min = 0;
-    static unsigned long next_5_min = 0;
-    static unsigned long next_wifi_time = 0;
-    
-    if (ms >= next_sample_time) {
-        for (int i=0; i < cfg.n_tstats; i++) {
-            Tstat_t &tstat = cfg.tstats[i];
-            if ((tstat.active) && (tstat.input_port >= A0)) {
-                Tdata_t &tdata = data.tstats[i];
-                int val = analogRead(tstat.input_port);
-                tdata.stat_1min.addSample(val);
-                tdata.stat_5min.addSample(val);
-            }
-        }
-        next_sample_time = ms + SAMPLE_INTERVAL;
-    }
-
-    if (ms >= next_wifi_time) {
-        processWiFi();
-        next_wifi_time = ms + 1000;
-    }
-
-    if (ms >= next_1_min) {
-        if (next_1_min) {
-            checkTempsAgainstSchedule();
-        }
-        next_1_min = ms + (MINUTESECS * 1000);
-    }
-
-    if (ms >= next_5_min) {
-        if (next_5_min) {
-            fiveMinuteUpdate();
-        }
-        next_5_min = ms + (5 * MINUTESECS * 1000);
-    }
-}
-
-void test_sched() {
-    for (int i=0; i < cfg.n_zones; i++) {
-        printf("zone: %d\n", i);
-        for (short hr = 0; hr < 24; hr++) {
-            unsigned short hr_min = hr*60;
-            int tgt = cfg.zones[i].getTgtTemp(hr_min);
-            printf(" %d -> %d\n", hr, tgt);
-        }
-    }
-}
-
-void test_process_temp() {
-    for (long ms=1000; ms < 70000; ms++) {
-        periodicFuncs(ms);
-    }
-}
-void run_tests() {
-    //test_sched();
-    test_process_temp();
-    exit(0);
-}
-
-
-void sendZoneStatus(WiFiClient &client, int zone_idx) {
-    Zdata_t &zone = data.zones[zone_idx];
-    client.print("<title>THERMOSTATUS</title>");
-    client.print("<h1>");
-    client.print("Thermostat as of ");
+void sendTime(WiFiClient &client) {
     client.print(timer.getHours());
     client.print(":");
     int m = timer.getMinutes();
     if (m <= 9)
         client.print("0");
     client.print(m);
+}
+
+void sendZoneStatus(WiFiClient &client, int zone_idx) {
+    Zdata_t &zone = data.zones[zone_idx];
+    client.print("<title>THERMOSTATUS</title>");
+    client.print("<h1>");
+    client.print("Thermostat as of ");
+    sendTime(client);
     client.print("<br>Zone: ");
     client.print(cfg.zones[zone_idx].name);
     if (zone.is_on)
@@ -413,18 +284,119 @@ void processClient(WiFiClient &client) {
 
     }
 }
-    
+
+void test_sched() {
+    for (int i=0; i < cfg.n_zones; i++) {
+        printf("zone: %d\n", i);
+        for (short hr = 0; hr < 24; hr++) {
+            unsigned short hr_min = hr*60;
+            int tgt = cfg.zones[i].getTgtTemp(hr_min);
+            printf(" %d -> %d\n", hr, tgt);
+        }
+    }
+}
+
+void test_process_temp() {
+    for (long ms=1000; ms < 70000; ms++) {
+        periodicFuncs(ms);
+    }
+}
+void run_tests() {
+    //test_sched();
+    test_process_temp();
+    exit(0);
+}
+
+
 void send_server() {
-    int data = 0;
+    Tstat_t &tcfg = cfg.tstats[0];
+    Tdata_t &tstat = data.tstats[0];
+    Zdata_t &zone = data.zones[tcfg.zone];
     WiFiClient client;
+
+    if (!tcfg.active)
+        return;
+
     if ( WiFi.status() != WL_CONNECTED) {
         return;
     }
-    const char *server = "192,168,1,22";  // Server
+    const char *server = "192.168.1.2";  // Server
 
     if (client.connect(server, 3001)){
-        client.print(data);
+        sendTime(client);
+        client.print(",");
+        client.print(tstat.tgt);
+        client.print(",");
+        client.print(tstat.stat_1min.last_temp);
+        client.print(",");
+        client.print(tstat.stat_5min.last_temp);
+        client.print(",");
+        client.print(tstat.prev_5min);
+        client.print(",");
+        client.print(zone.is_on ? "ON" : "OFF");
+        client.print(",");
+        int m = zone.on_off_time ? ((timer.time() - zone.on_off_time)/MINUTESECS) : 0;
+        client.print(m);
+        client.print("\n");
+
         client.stop();
+    }
+}
+
+void oneMinuteUpdate() {
+    checkTempsAgainstSchedule();
+    send_server();
+}
+
+void fiveMinuteUpdate() {
+    int i;
+
+    for (i=0; i < cfg.n_tstats; i++) {
+        Tstat_t &tstat = cfg.tstats[i];
+        if (tstat.active) {
+            Tdata_t &tdata = data.tstats[i];
+            tdata.prev_5min = tdata.stat_5min.last_temp;
+            tdata.stat_5min.getTemp(aref_volts);
+        }
+    }
+}
+
+void periodicFuncs(unsigned long ms) {
+    static unsigned long next_sample_time = 0;
+    static unsigned long next_1_min = 0;
+    static unsigned long next_5_min = 0;
+    static unsigned long next_wifi_time = 0;
+    
+    if (ms >= next_sample_time) {
+        for (int i=0; i < cfg.n_tstats; i++) {
+            Tstat_t &tstat = cfg.tstats[i];
+            if ((tstat.active) && (tstat.input_port >= A0)) {
+                Tdata_t &tdata = data.tstats[i];
+                int val = analogRead(tstat.input_port);
+                tdata.stat_1min.addSample(val);
+                tdata.stat_5min.addSample(val);
+            }
+        }
+        next_sample_time = ms + SAMPLE_INTERVAL;
+    }
+
+    if (ms >= next_wifi_time) {
+        processWiFi(cfg);
+        next_wifi_time = ms + 1000;
+    }
+
+    if (ms >= next_1_min) {
+        if (next_1_min) {
+            oneMinuteUpdate();
+        }
+        next_1_min = ms + (MINUTESECS * 1000);
+    }
+
+    if (ms >= next_5_min) {
+        if (next_5_min) {
+            fiveMinuteUpdate();
+        }
+        next_5_min = ms + (5 * MINUTESECS * 1000);
     }
 }
 

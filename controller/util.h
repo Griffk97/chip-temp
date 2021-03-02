@@ -1,11 +1,10 @@
 // Mimic Arduino classes
-#include <string>
 #include <iostream> 
 #include <unistd.h> 
 #include <sys/socket.h> 
 #include <netinet/in.h> 
 #include <netdb.h>
-#include <time.h>
+#include <fcntl.h>
 
 using namespace std;
 
@@ -163,19 +162,22 @@ public:
 };
 
 //----------------------------------------------------------------------------------
-void processClient(WiFiClient &client);
-
 void errexit(const char *errmsg) {
     std::cout << errmsg << "\n";
     exit(1);
 }
 
-void processWiFi() {
+void processClient(WiFiClient &client);
+
+void processWiFi(Cfg_t &cfg) {
     static int server_fd = 0;
     struct sockaddr_in address; 
     struct sockaddr *addrptr = (struct sockaddr*) &address;
     int opt = 1; 
     socklen_t addrlen = sizeof(address); 
+
+    if ( WiFi.status() != WL_CONNECTED)
+        WiFi.begin(cfg.ssid, cfg.pass);
 
     if (server_fd == 0) {
 
@@ -197,12 +199,15 @@ void processWiFi() {
         if (bind(server_fd, addrptr, sizeof(address))<0) { 
             errexit("bind"); 
         } 
-
+        int flags = fcntl(server_fd, F_GETFL);
+        fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+  
         if (listen(server_fd, 3) < 0) { 
             errexit("listen"); 
         } 
     }
     int client_fd = accept(server_fd, addrptr, &addrlen);
+
     if (client_fd > 0) {
         WiFiClient client(client_fd);
         processClient(client);
@@ -249,4 +254,3 @@ main(int argc, char *argv[])
         loop();
     return(0);
 }
-

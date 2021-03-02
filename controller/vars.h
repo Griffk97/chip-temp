@@ -54,22 +54,7 @@ struct TempStat_t {
         count++;
     }
 
-    // TMP36 calibrated to 10mV / deg C and 750mV at 25C (= 77F)
-    // With 0 - 3.3V input voltage and 1024 (10 bit) digital units
-    // 1 unit = 0.0032226 V = 3.2226 mV = 0.32226 deg C = 0.58 deg F
-    // 1C = 3.1031 units
-    // 1F = 1.724 units
-    // 25C = 77F = 750mV ~= 232.73 units
-
-    float getTemp() {
-        if (count <= 0)
-            return (0.0);
-        float x = float(sensor_sum) / float(count); // average reading
-        x = 77.0 + (0.58 * (x - 232.73));           // temp in Faranheit
-        last_temp = x;                              // save most recent reading
-        sensor_sum = count = 0;
-        return x;
-    }
+    float getTemp(float aref_volts);
 };
 
 // dtemp = change in inside temp per hour

@@ -37,11 +37,9 @@ Timer_t timer;
 bool writeRelay(uint8_t cmd) {
     static bool initialized = false;
     if (!initialized) {
-        PRINTLN("Init start");
         Wire.begin();
         Wire.beginTransmission(RELAY_ADDR); 
         Wire.endTransmission(RELAY_ADDR); 
-        PRINTLN("Init finished");
         initialized = true;
     }
     Wire.beginTransmission(RELAY_ADDR); 
@@ -67,7 +65,7 @@ bool setRelayState(uint8_t zone_idx, bool tgt) {
 
 void processClient(WiFiClient &client);
 
-void processWiFi() {
+void processWiFi(Cfg_t &cfg) {
     static WiFiServer server(80);
     if ( WiFi.status() != WL_CONNECTED) {
         PRINT("Attempting to connect to WPA network...\n");
@@ -77,17 +75,19 @@ void processWiFi() {
         IPAddress ip = WiFi.localIP();
         PRINT("IP Address: ");
         PRINT_IP(ip);
-        PRINT("\n") 
+        PRINT("\n");
 
         // Find out what time it is
         timer.begin(-5);
+        timer.update();
         PRINT("Time: ");
         PRINT(timer.getHours());
         PRINT(":");
         int m = timer.getMinutes();
         if (m <= 9)
             PRINT("0"); 
-        PRINT(m)    
+        PRINT(m);
+        
         server.begin();
     }
     
@@ -95,4 +95,3 @@ void processWiFi() {
     if (client)
       processClient(client);
 }
-
