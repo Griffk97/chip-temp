@@ -29,7 +29,7 @@ void periodicFuncs(unsigned long ms);
 bool isWorkDay();
 
 void setArefVoltage() {
-    analogReference(AR_INTERNAL1V0);
+//    analogReference(AR_INTERNAL1V0);
     aref_volts = 1.0;
 }
 unsigned short getHrMin() {
@@ -408,3 +408,4 @@ void loop() {
     timer.update();
 //    delay(1000);    
 }
+

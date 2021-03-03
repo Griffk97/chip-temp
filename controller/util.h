@@ -12,6 +12,11 @@ class Serial_t {
 };
 Serial_t Serial;
 
+//----------------------------------------------------------------------------------
+struct WiFiClient;
+void processClient(WiFiClient &client);
+
+
 
 #define PRINT(v) ( std::cout << v )
 #define PRINTLN(v) ( std::cout << v << "\n" )
@@ -157,15 +162,6 @@ public:
     }
 
 }; */
-
-//----------------------------------------------------------------------------------
-void errexit(const char *errmsg) {
-    std::cout << errmsg << "\n";
-    exit(1);
-}
-
-void processClient(WiFiClient &client);
-
 
 //----------------------------------------------------------------------------------
 // Misc functions + main()
