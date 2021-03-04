@@ -1,8 +1,6 @@
 // Mimic Arduino classes
 #include <iostream> 
 #include <unistd.h> 
-#include <fcntl.h>
-
 
 using namespace std;
 
@@ -166,11 +164,15 @@ public:
 //----------------------------------------------------------------------------------
 // Misc functions + main()
 
-#define A0 0
+#define A0 0                    // for analogRead()
+#define AR_INTERNAL1V0 1        // for analogReference()
 
 int analogRead(int port) {
     return 200;
 }
+void analogReference(int ref_type) {
+}
+
 void delay (time_t millisecs) {
     usleep(1000 * millisecs);
 }

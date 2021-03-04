@@ -1,3 +1,4 @@
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netinet/in.h> 
 #include <netdb.h>
@@ -130,8 +131,10 @@ void processWiFi(Cfg_t &cfg) {
         if (bind(server_fd, addrptr, sizeof(address))<0) { 
             errexit("bind"); 
         } 
-        int flags = fcntl(server_fd, F_GETFL);
-        fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+//        int flags = fcntl(server_fd, F_GETFL);
+//        fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+        int opt = 1;
+        ioctl(server_fd, FIONBIO, &opt);
   
         if (listen(server_fd, 3) < 0) { 
             errexit("listen"); 

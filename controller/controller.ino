@@ -29,7 +29,7 @@ void periodicFuncs(unsigned long ms);
 bool isWorkDay();
 
 void setArefVoltage() {
-//    analogReference(AR_INTERNAL1V0);
+    analogReference(AR_INTERNAL1V0);
     aref_volts = 1.0;
 }
 unsigned short getHrMin() {
@@ -67,7 +67,7 @@ void initData() {
 
     cfg.n_zones = 1;
     strcpy(cfg.zones[0].name, "FAMILY RM");
-    memset(cfg.zones[0].tgt_temp, 72, N_SLOTS);
+    memset(cfg.zones[0].tgt_temp, 70, N_SLOTS);
     cfg.zones[0].tgt_temp[N_SLOTS - 1] = 63;
 
     initSched(cfg.default_sched);
@@ -408,4 +408,3 @@ void loop() {
     timer.update();
 //    delay(1000);    
 }
-
